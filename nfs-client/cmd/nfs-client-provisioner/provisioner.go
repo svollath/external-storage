@@ -92,13 +92,43 @@ func (p *nfsProvisioner) Provision(options controller.VolumeOptions) (*v1.Persis
 	return pv, nil
 }
 
+const (
+	purgeVolumesKey = "PURGE_VOLUMES"
+)
+const (
+	volumePurgeTMOKey = "VOLUME_PURGE_TMO"
+)
+
 func (p *nfsProvisioner) Delete(volume *v1.PersistentVolume) error {
 	path := volume.Spec.PersistentVolumeSource.NFS.Path
 	pvName := filepath.Base(path)
 	oldPath := filepath.Join(mountPath, pvName)
-	archivePath := filepath.Join(mountPath, "archived-"+pvName)
-	glog.V(4).Infof("archiving path %s to %s", oldPath, archivePath)
-	return os.Rename(oldPath, archivePath)
+	purgeVolumes := os.Getenv(purgeVolumesKey)
+	if purgeVolumes != "true" || purgeVolumes != "false" {
+		purgeVolumes = "false"
+		glog.V(4).Infof("environment variable %s not set! Using default: false.", purgeVolumesKey)
+	}
+	volumePurgeTMO := os.Getenv(volumePurgeTMOKey)
+	if volumePurgeTMO == "" {
+		volumePurgeTMO = "30"
+		glog.V(4).Infof("environment variable %s not set! Using default: 30.", volumePurgeTMOKey)
+	}
+	if purgeVolumes == "false" {
+		archivePath := filepath.Join(mountPath, "archived-"+pvName)
+		glog.V(4).Infof("archiving path %s to %s", oldPath, archivePath)
+		return os.Rename(oldPath, archivePath)
+        }
+	if purgeVolumes == "true" && volumePurgeTMO == "0" {
+		glog.V(4).Infof("purged path %s", oldPath)
+		return os.RemoveAll(oldPath)
+	}
+	if purgeVolumes == "true" && volumePurgeTMO != "0" {
+		archivePath := filepath.Join(mountPath, "archived-"+pvName)
+		glog.V(4).Infof("archiving %s, purge it after %s min. ", archivePath, volumePurgeTMO)
+		// write to purgequeue
+		return os.Rename(oldPath, archivePath)
+	}
+	panic("Volume deletion failed.")
 }
 
 func main() {
