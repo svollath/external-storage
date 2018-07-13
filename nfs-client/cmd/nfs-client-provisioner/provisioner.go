@@ -20,9 +20,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"time"
 	"os"
 	"path/filepath"
 	"strings"
+	"strconv"
 
 	"github.com/golang/glog"
 	"github.com/kubernetes-incubator/external-storage/lib/controller"
@@ -98,34 +100,54 @@ const (
 const (
 	volumePurgeTMOKey = "VOLUME_PURGE_TMO"
 )
+var queuefile = filepath.Join(mountPath, "nfs-client-provisioner-queue.csv")
+
+func Queue(queuefile, data string) {
+	glog.V(0).Infof("---- Entered Queue Function ----")
+        fileHandle, err := os.OpenFile(queuefile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0777)
+        if err != nil {
+                glog.Fatal("%s", err)
+        }
+        defer fileHandle.Close()
+        if _, err = fileHandle.WriteString(data); err != nil {
+                glog.Fatal("%s", err)
+        }
+}
 
 func (p *nfsProvisioner) Delete(volume *v1.PersistentVolume) error {
 	path := volume.Spec.PersistentVolumeSource.NFS.Path
 	pvName := filepath.Base(path)
 	oldPath := filepath.Join(mountPath, pvName)
-	purgeVolumes := os.Getenv(purgeVolumesKey)
-	if purgeVolumes != "true" || purgeVolumes != "false" {
-		purgeVolumes = "false"
+	purgeVolumes, _ := strconv.ParseBool(os.Getenv(purgeVolumesKey))
+	if purgeVolumes == true {
+		purgeVolumes = true
+	} else if purgeVolumes != false {
+		purgeVolumes = false
 		glog.V(4).Infof("environment variable %s not set! Using default: false.", purgeVolumesKey)
 	}
-	volumePurgeTMO := os.Getenv(volumePurgeTMOKey)
-	if volumePurgeTMO == "" {
-		volumePurgeTMO = "30"
+	volumePurgeTMO, _ := strconv.ParseInt(os.Getenv(volumePurgeTMOKey), 10, 64)
+	if os.Getenv(volumePurgeTMOKey) == "" {
+		volumePurgeTMO = int64(30)
 		glog.V(4).Infof("environment variable %s not set! Using default: 30.", volumePurgeTMOKey)
 	}
-	if purgeVolumes == "false" {
+	glog.V(0).Infof("Purge: %s", purgeVolumes)
+	glog.V(0).Infof("TMO:   %s", volumePurgeTMO)
+	if purgeVolumes == false {
 		archivePath := filepath.Join(mountPath, "archived-"+pvName)
 		glog.V(4).Infof("archiving path %s to %s", oldPath, archivePath)
 		return os.Rename(oldPath, archivePath)
         }
-	if purgeVolumes == "true" && volumePurgeTMO == "0" {
+	if purgeVolumes == true && volumePurgeTMO == 0 {
 		glog.V(4).Infof("purged path %s", oldPath)
 		return os.RemoveAll(oldPath)
 	}
-	if purgeVolumes == "true" && volumePurgeTMO != "0" {
+	if purgeVolumes == true && volumePurgeTMO != 0 {
 		archivePath := filepath.Join(mountPath, "archived-"+pvName)
-		glog.V(4).Infof("archiving %s, purge it after %s min. ", archivePath, volumePurgeTMO)
-		// write to purgequeue
+		archtime := time.Now().Unix()
+		pvexpire := (archtime + int64(volumePurgeTMO) * 60)
+		queuelog := fmt.Sprintf("%v,%s\n", pvexpire, archivePath)
+		Queue(queuefile, queuelog)
+		glog.V(0).Infof("archiving %s, purge it after %s min.", archivePath, volumePurgeTMO)
 		return os.Rename(oldPath, archivePath)
 	}
 	panic("Volume deletion failed.")

@@ -25,6 +25,10 @@ spec:
               value: 10.10.10.60
             - name: NFS_PATH
               value: /ifs/kubernetes
+            - name: PURGE_VOLUMES
+              value: false
+            - name: VOLUME_PURGE_TMO
+              value: 30
       volumes:
         - name: nfs-client-root
           nfs:
